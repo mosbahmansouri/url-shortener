@@ -4,7 +4,7 @@ import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-secret = os.environ.get("jwt_secret")
+secret = os.environ.get("JWT_SECRET")
 
 if not secret: 
     raise RuntimeError("JWT secret key not found in environment variables")

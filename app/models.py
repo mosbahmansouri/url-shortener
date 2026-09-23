@@ -2,12 +2,15 @@ from datetime import datetime, timezone
 from sqlalchemy import ForeignKey, String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
+from sqlalchemy import UniqueConstraint
 
 class Link(Base):
     __tablename__ = "links"
+    __table_args__ = (UniqueConstraint("url", "user_id", name="uq_link_url_user"),)
+
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str | None] = mapped_column(String(12), unique=True, index=True)
-    url: Mapped[str] = mapped_column(Text, unique=True)
+    url: Mapped[str] = mapped_column(Text)
     clicks: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
