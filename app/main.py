@@ -1,6 +1,6 @@
 import os
 import redis
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException,Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -12,7 +12,7 @@ from .schema import ShortenIn, UserCreate,LoginUser
 from .utility import base62
 from argon2 import PasswordHasher
 from .auth import create_token , get_current_user_id
-
+from .rate_limiter import rate_Limiter
 Base.metadata.create_all(engine)
 cache = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
 app = FastAPI(title="URL Shortener")
@@ -25,9 +25,10 @@ def create(body: ShortenIn, db: Session = Depends(get_db), user_id : int = Depen
 
     url = str(body.url).strip()
     link = Link(url=url, user_id =user_id)
+    rate_Limiter(cache,"links",str(user_id),limit=10,window_second=50)
 
     existing_link = db.execute(
-    select(Link).where((Link.url == url) | (Link.user_id == user_id))
+    select(Link).where((Link.url == url) & (Link.user_id == user_id))
     ).scalar()
     if existing_link:
         raise HTTPException(400, "You've already shortened this URL")
@@ -43,10 +44,11 @@ def create(body: ShortenIn, db: Session = Depends(get_db), user_id : int = Depen
 
 
 @app.get("/{code}")
-def redirect(code: str, db: Session = Depends(get_db), ):
+def redirect(code: str,db: Session = Depends(get_db), ):
         url = cache.get(f"url:{code}")
         if not url:
-            url = db.scalar(select(Link.url).where(Link.code == code))
+        
+            url = db.scalar(select(Link.url).where((Link.code == code)))
             if not url:
                 raise HTTPException(404, "Not found")
             cache.set(f"url:{code}", url, ex=3600)
@@ -58,7 +60,8 @@ def redirect(code: str, db: Session = Depends(get_db), ):
 @app.get("/links/all")
 def list_all_links(db: Session = Depends(get_db), user_id : int = Depends(get_current_user_id)):
 
-    
+        rate_Limiter(cache,"list_links",str(user_id),limit=20,window_second=60)
+
 
         
         links = db.execute(select(Link).where(Link.user_id == user_id)).scalars().all()
@@ -66,14 +69,29 @@ def list_all_links(db: Session = Depends(get_db), user_id : int = Depends(get_cu
         return [{"code": link.code, "url": link.url, "clicks": link.clicks} for link in links]
 
 
-
-
+@app.delete("/links/{code}",status_code=204)
+def delete_link(code: str,user_id : int= Depends(get_current_user_id) ,db : Session = Depends(get_db)):
+    
+    link =  db.execute(select(Link).where((Link.code == code ) & (Link.user_id == user_id))).scalar()   
+    if not link :
+     raise HTTPException (404,"link not found" )
+    db.delete(link)
+    db.commit()
+    cache.delete(f"url:{code}")
+    return {"status" : 204 ,"detail":"Link deleted succesfully" }
+    
+    
 
 
 
 
 @app.post("/sign_up",status_code=201)
-def sign_up(body: UserCreate, db: Session = Depends(get_db)):
+def sign_up(body: UserCreate,request : Request ,db: Session = Depends(get_db)):
+
+
+
+        client_ip = request.client.host
+        rate_Limiter(cache,"sign_up",client_ip,limit=5,window_second=50)
 
             ## no parametars 
         username = body.username
@@ -104,7 +122,11 @@ def sign_up(body: UserCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/login", status_code=200)
-def login(body: LoginUser, db: Session = Depends(get_db)):
+def login(body: LoginUser,request : Request     ,db: Session = Depends(get_db)):
+
+    client_ip = request.client.host
+    rate_Limiter(cache,"login",client_ip,limit=5,window_second=50)
+
     email = body.email.strip().lower()
     user = db.execute(select(User).where(User.email == email)).scalar()
 
